@@ -1,0 +1,828 @@
+---
+title: "Crowding and Development_Jan2019"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+During the summer of 2017, Melanie Smith, Matt Pahl, Gray Wilson, and Molly Albecker conducted an experiment in which we raised different densities (2, 4, or 8) of coastal and inland Hyla cinerea tadpoles in either freshwater or 4ppt salinity water. In doing so, we asked a) how does saltwater affect development and survival of coastal vs. inland tadpoles? b) how does competition affect development and survival of coastal and inland tadpoles? and c) how does saltwater exposure and competition interact to affect development and survival of coastal and inland tadpoles? 
+
+I will analyze the growth and development data by investigating:  
+1) how growth rates vary according to treatment
+2) how survival varies according to treatment
+3) how time to metamorphosis varies according to treatment
+4) how size at metamorphosis (length and mass) vary according to treatment
+
+Step one, load dependencies and data. 
+```{r, include=FALSE}
+# Code Dependencies
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+library(bbmle)
+library(survival)
+library(blme)
+library(nlme)
+library(optimx)
+library(dplyr)
+library(merTools)
+library(MASS)
+library(reshape2)
+library(brglm)
+library(survminer)
+library(lme4)
+library(grid)
+library(data.table)
+```
+
+```{r}
+#Tadpole growth rate data
+growth = read.csv("~/Desktop/Work/DataSets/Density2017/Density_Data.csv")
+#growth = na.omit(growth)
+#Tadpole survivorship, time to metamorphosis across development
+meta = read.csv("~/Desktop/Work/DataSets/Density2017/Metadat.csv")
+
+#ReLabel Density
+meta$denlab = 0
+for(i in 1:nrow(meta)){ 
+  if (meta$Density[i] == "2"){meta$denlab[i] = "Low"}
+  else if (meta$Density[i] == "4"){meta$denlab[i] = "Med"}
+  else {meta$denlab[i] = "High"}
+}
+
+dodge <- position_dodge(width=0.5) 
+
+```
+** Growth Rates through Time **
+
+To analyze growth through time according to density, location, and salinity, I will use the Gompertz growth formula.
+```{r message=FALSE, warning=FALSE}
+#Gompertz
+Gom=function(x,initial,gamma,alpha){
+  initial*exp(gamma/alpha*(1-exp(-alpha*x)))
+}
+
+#Gompertz
+Wt=function(x,initial,Gamma,alpha){
+  initial*exp(Gamma/alpha*(1-exp(-alpha*x)))
+}
+```
+
+```{r}
+#Create data frame
+
+growth$locdensalwkrp <- paste(growth$Location,growth$Density,growth$Sal,growth$Week,growth$Replicate,sep = "_")
+
+
+x = data.frame()
+for(i in 1:length(unique(growth$locdensalwkrp))){
+  xt = unique(growth$locdensalwkrp)[i]
+  dat2 = filter(growth, locdensalwkrp == xt)
+  length_mean = mean(dat2$Total.Length)
+  x. = data.frame("Location" = unique(dat2$Location),
+                  "Replicate" = unique(dat2$Replicate),
+                  "Density" = unique(dat2$Density),
+                  "Sal" = unique(dat2$Sal),
+                  "Week" = unique(dat2$Week),
+                  "Total.Length" = length_mean)
+  x = rbind(x,x.)
+  }
+
+#x=data.frame(Total.Length=x$Total.Length,Week=x$Week,Location= x$Location,Sal= x$Sal,Density=x$Density)
+#x=na.omit(x)
+x$Sal.=as.factor(x$Sal)
+x$Density. = as.factor(x$Density)
+which(is.na(x$Total.Length))
+```
+
+```{r}
+#Establish reasonable starting parameters
+m=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=10,gamma=0.2,alpha=.1,stdv=5),  
+        parameters=list(initial~1,gamma~1,alpha~1),
+        method = "bobyqa", skip.hessian=FALSE)
+summary(m)
+
+nm1=unname(coef(m)) #extract starting coefficients
+```
+
+```{r}
+# Candidate Models
+
+m1=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~Density.,gamma~Location*Sal.*Density.,alpha~Location*Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m2=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.*Density.,alpha~Location+Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m3=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.*Density.,alpha~Location*Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m4=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.*Density.,alpha~Location+Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+##
+
+m5=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.*Density.,alpha~Location*Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m6=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.*Density.,alpha~Location+Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m7=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.*Density.,alpha~Location*Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m8=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.*Density.,alpha~Location+Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+##
+
+m9=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.+Density.,alpha~Location*Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m10=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.+Density.,alpha~Location+Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m11=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.+Density.,alpha~Location*Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m12=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location*Sal.+Density.,alpha~Location+Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+##
+
+m13=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.+Density.,alpha~Location*Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m14=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.+Density.,alpha~Location+Sal.*Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m15=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.+Density.,alpha~Location*Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+m16=mle2(Total.Length ~ dnorm(Gom(Week,initial,gamma,alpha),sd=stdv),
+        data = x,
+        optimizer = "optimx",
+        start = list(initial=nm1[1],gamma=nm1[2],alpha=nm1[3],stdv=nm1[4]),  
+        parameters=list(initial~1,gamma~Location+Sal.+Density.,alpha~Location+Sal.+Density.),
+        method = "bobyqa", skip.hessian=FALSE)
+
+#Use AIC to determine which is best fit model 
+ICtab(m,m1,m2,m3,m4,m5,m6,m7,m8,
+      m9,m10,m11,m12,m13,m14,m15,m16,weights=TRUE)
+
+#Model 14 is the best fit
+summary(m14) 
+predict(m14)
+
+#Diagnostics
+x$resid = residuals(m14)[,1]
+x$cup = growth$cup
+ggplot(x,aes(x=Week,y=resid))+geom_jitter()+geom_smooth(method = lm,se=FALSE)
+mod_diag = lm(resid~Week*cup, data = x)
+mod_diag. = lm(resid~Week, data = x)
+mod_diag.. = lm(resid~Week+cup, data = x)
+mod_diag... = lm(resid~1, data = x)
+ICtab(mod_diag...,mod_diag..,mod_diag.,mod_diag)
+anova(mod_diag,mod_diag.)
+
+#To extract coefficients for plotting
+#View(coef(m14))
+#View(confint(m14,method="quad"))
+```
+Plot results
+```{r}
+require(RColorBrewer)
+require(plotly)
+growth$sallocden = paste(growth$Sal,growth$Location,growth$Density,sep="_")
+growth$salloc = paste(growth$Sal, growth$Location)
+growth$Density = as.factor(growth$Density)
+# Plotting colors
+cols_up <- c("Inland" = "darkseagreen4", "Coastal" = "dodgerblue4")
+cols_low <- c("inland" = "darkseagreen4", "coastal" = "dodgerblue4")
+cols_locsal <- c("coastal_0"="dodgerblue4", "coastal_4"="blue", "inland_0"="darkseagreen4","inland_4"="green")
+cols_salloc <- c("0_Coastal"="dodgerblue4", "4_Coastal"="blue", "0_Inland"="darkseagreen4","4_Inland"="green")
+cols_sallocden <- c("0_Coastal_8" = "#66CCEE", "0_Coastal_4" = "#99EE88", "0_Coastal_2" = "#CC8899", "0_Inland_2" = "#CC0077",
+                    "0_Inland_8" = "#CC2277",  "0_Inland_4" = "#009944",  "4_Inland_4" = "#f2d07f", "4_Coastal_4" = "#f2a717",
+                    "4_Coastal_2" = "#CCAAFF", "4_Inland_2" = "#663388", "4_Inland_8" = "#FFFF77",  "4_Coastal_8" = "#664400")
+line <- c("2" = "solid", "4" = "F1", "8" = "dashed")
+line2 <- c("0"= "solid", "4" = "dashed")
+# Labels for Facet Wrapping 
+fac_label = c("2"="2 Tadpoles",
+              "4"="4 Tadpoles",
+              "8"="8 Tadpoles")
+fac_label1 = c("0"="Freshwater (0.5ppt)",
+              "4"="Saltwater (4ppt)")
+
+modfit = data.frame(x,modpred = predict(m14))
+modfit$sallocden = paste(modfit$Sal,modfit$Location,modfit$Density,sep="_")
+
+
+d2d = ggplot(modfit, aes(x=Week ,y=Total.Length, group = sallocden, fill = Location, colour = Location))  + 
+  geom_jitter(aes(x=Week,y=Total.Length),size=0.5,alpha = 1)+#xlim(0,35)+
+  stat_smooth(aes(linetype = Density.),size = 2,se = TRUE,span = 3.5)+xlim(0,12.5)+
+  scale_linetype_manual(values = line) +
+  ylab("Total Length (mm)")+ xlab("Week")+
+  scale_colour_manual(values = cols_up)+ 
+  scale_fill_manual(values = cols_up)+
+  theme_bw(base_size = 24, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")+
+  facet_wrap(~Sal,labeller=labeller(Sal = fac_label1),nrow = 1)
+  #facet_wrap(~salloc, labeller=labeller(Density = fac_label),nrow = 1)  
+d2d
+
+
+```
+
+```{r}
+#load a dataset with each coefficient (This needs to be updated)
+dencoef = read.csv("~/Desktop/Work/DataSets/Density2017/Density_growth_coef.csv")
+dencoef1 = dencoef[c(1:12),-c(1:5)] # Get the data in line
+
+
+#ReLabel Density
+dencoef1$denlab = 0
+for(i in 1:nrow(dencoef1)){ 
+  if (dencoef1$density[i] == "2"){dencoef1$denlab[i] = "Low"}
+  else if (dencoef1$density[i] == "4"){dencoef1$denlab[i] = "Med"}
+  else {dencoef1$denlab[i] = "High"}
+}
+
+dencoef1$salinity = as.factor(dencoef1$salinity)
+dencoef1$trt = paste(dencoef1$location,dencoef1$salinity,dencoef1$density,sep="_")
+dencoef1$locsal = paste(dencoef1$location,dencoef1$salinity,sep="_")
+```
+
+```{r}
+# Plot Alpha
+alphaden = ggplot(data=dencoef1, aes(x = reorder(denlab,density), y = alpha, group = locsal, shape=location, colour=location)) + 
+  ylab("Exponential Decay of Growth")+ xlab("Tadpole Density")+
+  scale_colour_manual(values = cols_low)+ #xlim(-0.5,6.5)+
+  scale_fill_manual(values = cols_low)+
+  scale_shape_manual(values = c("inland" = 17, "coastal" = 16))+
+  theme_bw(base_size = 24, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+alphaden1 = alphaden + #stat_smooth(method="glm") +
+  geom_line(aes(colour=location),linetype = 2,width = 0.25,position_dodge = 0.2)+
+  geom_point(aes(colour=location),size=8,position_dodge = 0.2)+
+  geom_errorbar(aes(ymin=alpha_lwr,ymax=alpha_upr,colour=location),width=0.2,position_dodge = 0.2)+
+  facet_wrap(~salinity,labeller=labeller(salinity = fac_label1),nrow = 1)
+alphaden1
+
+```
+
+```{r}
+# Plot Gamma
+gammaden = ggplot(data=dencoef1, aes(x =reorder(denlab,density), y = gamma, group = locsal, shape = location,colour=location)) + 
+  ylab("Size Specific Growth Rate")+ xlab("Tadpole Density")+
+  scale_colour_manual(values = cols_low)+ #xlim(-0.5,6.5)+
+  scale_fill_manual(values = cols_low)+
+  scale_shape_manual(values = c("inland" = 17, "coastal" = 16))+
+  theme_bw(base_size = 24, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+gammaden1 = gammaden + #stat_smooth(method="glm") 
+  geom_line(aes(colour=location),linetype = 2)+
+  geom_errorbar(aes(ymin=gamma_lwr,ymax=gamma_upr,colour=location),width=0.2)+
+  geom_point(aes(colour=location),size=8)+
+  facet_wrap(~salinity,labeller=labeller(salinity = fac_label1),nrow = 1)
+gammaden1
+
+```
+
+Tadpole mortality
+
+```{r}
+detach(package:plyr) 
+
+denmort1 = meta %>% #To calculate the proportion individuals that survived to metamorphosis
+  group_by(Location,Sal,denlab,Replicate) %>%
+  summarise(ct = length(Dead),
+            cat = sum(Dead),
+            prop.surv = (cat/ct)) 
+
+denmort1$Sal. = as.factor(denmort1$Sal)
+denmort1$denlab. = as.factor(denmort1$denlab)
+denmort1$salloc = paste(denmort1$Sal,denmort1$Location,sep="_") #for plotting later
+
+```
+
+```{r}
+
+#convergence was tricky for this test
+#source(system.file("utils", "allFit.R", package="lme4"))
+#a1.all <- allFit(a1) #Tests which convergence methods will work and which won't. Bobyqa works.
+
+a1 = bglmer(prop.surv ~ Sal + denlab. + Location + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+            glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+a2 = bglmer(prop.surv ~ Sal. * denlab. * Location + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+           glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+a3 = bglmer(prop.surv ~ Sal. + denlab. * Location + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+            glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+a4 = bglmer(prop.surv ~ Sal. * denlab. + Location + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+            glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+
+anova(a1,a2)
+anova(a1,a3)
+anova(a1,a4) #additive model is best
+
+summary(a1)
+```
+
+```{r}
+a5 = bglmer(prop.surv ~ 1 + denlab. + Location + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+            glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+a6 = bglmer(prop.surv ~ Sal. + 1 + Location + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+            glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+a7 = bglmer(prop.surv ~ Sal. + denlab. + 1 + (1|Replicate), 
+            data = denmort1, family = binomial(), weights = ct,
+            glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=20000)))
+
+anova(a1,a5) # no salinity effect (p = 0.58)
+anova(a1,a6) # effect of density (p = 0.0006)
+anova(a1,a7) # no location effect (p = 0.29)
+
+```
+
+```{r}
+#Full Plot 
+survplot <- expand.grid(Sal = unique(denmort1$Sal),
+                      #denlab. = seq(0,8, length = 50),
+                      denlab. = unique(denmort1$denlab.),
+                      Location = unique(denmort1$Location),
+                      prop.surv=0)
+mm = model.matrix(terms(a1),survplot)
+survplot$prop.surv = mm %*% fixef(a1)
+pvar1 <- diag(mm %*% tcrossprod(vcov(a1),mm))
+#tvar1 <- pvar1+VarCorr(b4b)$plot[1]
+survplot <- data.frame(
+  survplot
+  , plo = survplot$prop.surv-1.96*sqrt(pvar1)
+  , phi = survplot$prop.surv+1.96*sqrt(pvar1)
+  #, tlo = propsurvplot$binary_hatch-2*sqrt(tvar1)
+  #, thi = propsurvplot$binary_hatch+2*sqrt(tvar1)
+)
+survplot=data.frame(survplot[,1:3],apply(survplot[,4:6],2,plogis))
+survplot$trt = paste(survplot$Sal,survplot$denlab.,survplot$Location,sep="_")
+survplot$salloc = paste(survplot$Sal,survplot$Location,sep="_")
+
+shipshape <- c("0" = 16, "4" = 17)
+
+o1 = ggplot(data=survplot,aes(x=denlab.,y=prop.surv,group=salloc))+
+  xlab("Tadpole Density")+
+  ylab("Survivorship at Metamorphosis")+ ylim(0.25,1)+
+  #geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=Location),alpha=.2)+
+  #geom_line(aes(group=salloc, color=Location, linetype = factor(Sal)), size = 2)+
+  scale_linetype_manual(values = line2) +
+  scale_x_discrete(limits=c("Low","Med","High"))+
+  scale_colour_manual(values = cols_up) +
+  scale_fill_manual(values = cols_up) +
+  theme(legend.position="none")+theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+o2 = o1 + 
+  geom_line(aes(colour=Location),position = dodge, linetype = 2)+
+  geom_errorbar(aes(ymin=plo,ymax=phi,colour=Location), position= dodge,width=0.3)+
+  geom_point(aes(colour=Location,shape = factor(Sal)), position = dodge, size=8)+
+ #geom_jitter(data = denmort1, aes(x = factor(Density), y = prop.surv, 
+                                    #       group = salloc, colour = Location, shape = factor(Sal)), size = 2) +
+  scale_shape_manual(values = shipshape)
+o2
+```
+
+```{r}
+#plot raw summary data
+denmort2 = denmort1 %>% #To calculate the proportion individuals that survived to metamorphosis
+  group_by(Location,Sal,denlab.) %>%
+  summarise(surv = mean(prop.surv),
+            surverr = sd(prop.surv),
+            n = length(prop.surv)) 
+denmort2$se = denmort2$surverr/(sqrt(denmort2$n))
+denmort2$salloc = paste(denmort2$Sal,denmort2$Location,sep="_")
+denmort2$phi = denmort2$surv + (denmort2$se)
+denmort2$plo = denmort2$surv - (denmort2$se)
+
+shipshape2 = c("0_Coastal"=16, "4_Coastal"=1, "0_Inland"=17,  "4_Inland"=2)
+o1 = ggplot(data=denmort2,aes(x=denlab.,y=surv,group=salloc,colour = Location))+
+  xlab("Tadpole Density")+
+  ylab("Survivorship at Metamorphosis")+ #ylim(0.4,1)+
+  #geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=Location),alpha=.2)+
+  #geom_line(aes(group=salloc, color=Location, linetype = factor(Sal)), size = 2)+
+  scale_linetype_manual(values = line2) +
+  scale_colour_manual(values = cols_up) +
+  scale_fill_manual(values = cols_up) +
+  scale_x_discrete(limits=c("Low","Med","High"))+
+  theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+o2 = o1 + 
+  #geom_line(aes(colour=Location),position = dodge, linetype = 2)+
+  geom_errorbar(aes(ymin=plo,ymax=phi,colour=Location), position= dodge,width=0.3)+
+  geom_point(aes(colour=Location,shape = factor(salloc)), position = dodge, size=8)+
+ #geom_jitter(data = denmort1, aes(x = factor(Density), y = prop.surv, 
+                                    #       group = salloc, colour = Location, shape = factor(Sal)), size = 2) +
+  scale_shape_manual(values = shipshape2)
+o2
+```
+Time to Metamorphosis
+```{r}
+#Dataset filtered for just for those that made it to metamorphosis
+metamm= filter(meta,Dead != "0")
+metamm$salloc = paste(metamm$Sal,metamm$Location,sep="_") #for plotting later
+
+#For those that made it to metamorphosis, are there differences in timing according to treatment/location? 
+b1 = glmer(Time_MM ~ Location * denlab * Sal+ (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa"))
+b2 = glmer(Time_MM ~ Location * denlab + Sal + (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa"))
+b3 = glmer(Time_MM ~ Location + denlab * Sal + (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa")) 
+b4 = glmer(Time_MM ~ Location + denlab +Sal + (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa"))
+
+anova(b1,b4) #No interaction
+anova(b4,b2)
+anova(b4,b3) #There is interaction between Density and Salinity
+```
+
+```{r}
+#Likelihood Ratio Testing
+b5 = glmer(Time_MM ~ 1 + denlab + Sal + (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa")) 
+b6 = glmer(Time_MM ~ Location + 1 + Sal + (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa")) 
+b7 = glmer(Time_MM ~ Location + denlab + 1 + (1|Replicate), data = metamm, 
+            family = poisson(),control=glmerControl(optimizer = "bobyqa")) 
+
+anova(b4,b5) # Location is not significant (p = 0.39)
+anova(b4,b6) # Density is significant (p < 0.0001)
+anova(b4,b7) # Salinity is significant (p = 0.03)
+
+```
+
+```{r}
+#Full Plot 
+timeplot <- expand.grid(Sal = unique(metamm$Sal),
+                      #Density = seq(0,8, length = 50),
+                      Density = unique(denmort1$Density),
+                      Location = unique(metamm$Location),
+                      Time_MM=0)
+mm = model.matrix(terms(b3),timeplot)
+timeplot$Time_MM = mm %*% fixef(b3)
+pvar1 <- diag(mm %*% tcrossprod(vcov(b3),mm))
+#tvar1 <- pvar1+VarCorr(b4b)$plot[1]
+timeplot <- data.frame(
+  timeplot
+  , plo = timeplot$Time_MM-1.96*sqrt(pvar1)
+  , phi = timeplot$Time_MM+1.96*sqrt(pvar1)
+  #, tlo = propsurvplot$binary_hatch-2*sqrt(tvar1)
+  #, thi = propsurvplot$binary_hatch+2*sqrt(tvar1)
+)
+timeplot=data.frame(timeplot[,1:3],apply(timeplot[,4:6],2,exp))
+timeplot$trt = paste(timeplot$Sal,timeplot$Density,timeplot$Location,sep="_")
+timeplot$salloc = paste(timeplot$Sal,timeplot$Location,sep="_")
+
+b8 = ggplot(data=timeplot,aes(x=Density,y=Time_MM,group=salloc))+
+  xlab("Density of Tadpole Environment")+
+  ylab("Time to Metamorphosis (days)")+
+  geom_line(aes(colour=Location),position = dodge, linetype = 2)+
+  geom_errorbar(aes(ymin=plo,ymax=phi,colour=Location), position= dodge,width=0.3)+
+  geom_point(aes(colour=Location,shape = factor(Sal)), position = dodge, size=8)+
+ #geom_jitter(data = denmort1, aes(x = factor(Density), y = prop.surv, 
+                                    #       group = salloc, colour = Location, shape = factor(Sal)), size = 2) +
+  #geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=Location),alpha=.2)+
+  #geom_point(data = metamm, aes(x = Density, y = Time_MM, group = salloc, colour = Location, shape = factor(Sal)), position = dodge,size = 2)+
+  scale_shape_manual(values = shipshape)+
+  #geom_line(aes(group=salloc, color=Location,linetype = factor(Sal)),size =2)+
+  scale_colour_manual(values = cols_up) +
+  scale_fill_manual(values = cols_up) +
+  scale_linetype_manual(values = line2) +
+  theme(legend.position="none")+theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none") + xlim(1,8.2)
+b8
+```
+```{r}
+#Raw Data Plots
+matamm1  = metamm %>% #To calculate the proportion individuals that survived to metamorphosis
+  group_by(Location,Sal,denlab) %>%
+  summarise(surv = mean(Time_MM,na.rm=TRUE),
+            surverr = sd(Time_MM,na.rm=TRUE),
+            n = length(Time_MM)) 
+matamm1$se = matamm1$surverr/(sqrt(matamm1$n))
+matamm1$salloc = paste(matamm1$Sal,matamm1$Location,sep="_")
+matamm1$phi = matamm1$surv + (matamm1$se)
+matamm1$plo = matamm1$surv - (matamm1$se)
+
+b8 = ggplot(data=matamm1,aes(x=denlab,y=surv,group=salloc,colour = Location))+
+  xlab("Tadpole Density")+
+  ylab("Time to Metamorphosis (days)")+ #ylim(0.4,1)+
+  #geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=Location),alpha=.2)+
+  #geom_line(aes(group=salloc, color=Location, linetype = factor(Sal)), size = 2)+
+  scale_linetype_manual(values = line2) +
+  scale_colour_manual(values = cols_up) +
+  scale_fill_manual(values = cols_up) +
+  scale_x_discrete(limits=c("Low","Med","High"))+
+  theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+b9 = b8 + 
+  #geom_line(aes(colour=Location),position = dodge, linetype = 2)+
+  geom_errorbar(aes(ymin=plo,ymax=phi,colour=Location), position= dodge,width=0.35)+
+  geom_point(aes(colour=Location,shape = salloc), position = dodge, size=8)+
+ #geom_jitter(data = denmort1, aes(x = factor(Density), y = prop.surv, 
+                                    #       group = salloc, colour = Location, shape = factor(Sal)), size = 2) +
+  scale_shape_manual(values = shipshape2)
+b9
+```
+
+Mass at Metamorphosis
+```{r}
+
+# Are there differences in weight at metamorphosis due to location or trt?
+c1 = lmer(log(Final_mass) ~ Sal * Density * Location + (1|Replicate), data = metamm)
+c2 = lmer(log(Final_mass) ~ Sal + Density + Location + (1|Replicate), data = metamm)
+c3 = lmer(log(Final_mass) ~ Sal * Density + Location + (1|Replicate), data = metamm)
+c4 = lmer(log(Final_mass) ~ Sal + Density * Location + (1|Replicate), data = metamm)
+
+anova(c1,c2)
+anova(c2,c3)
+anova(c2,c4) #additive model (c2) is best
+
+#Likelihood ratio testing
+c5 = lmer(log(Final_mass) ~ 1 + Density + Location + (1|Replicate), data = metamm)
+c6 = lmer(log(Final_mass) ~ Sal + 1 + Location + (1|Replicate), data = metamm)
+c7 = lmer(log(Final_mass) ~ Sal + Density + 1 + (1|Replicate), data = metamm)
+
+anova(c2,c5) # Salinity not significant (p = 0.71)
+anova(c2,c6) # Density is significant (p = 0.03)
+anova(c2,c7) # Location is not significant (p = 0.27)
+
+```
+
+```{r}
+#Full Plot 
+massplot <- expand.grid(Sal = unique(metamm$Sal),
+                      Density = seq(0,8, length = 50),
+                      #Density = unique(denmort1$Density),
+                      Location = unique(metamm$Location),
+                      Final_mass=0)
+mm = model.matrix(terms(c2),massplot)
+massplot$Final_mass = mm %*% fixef(c2)
+pvar1 <- diag(mm %*% tcrossprod(vcov(c2),mm))
+#tvar1 <- pvar1+VarCorr(b4b)$plot[1]
+massplot <- data.frame(
+  massplot
+  , plo = massplot$Final_mass-1.96*sqrt(pvar1)
+  , phi = massplot$Final_mass+1.96*sqrt(pvar1)
+  #, tlo = propsurvplot$binary_hatch-2*sqrt(tvar1)
+  #, thi = propsurvplot$binary_hatch+2*sqrt(tvar1)
+)
+massplot=data.frame(massplot[,1:3],apply(massplot[,4:6],2,exp))
+massplot$trt = paste(massplot$Sal,massplot$Density,massplot$Location,sep="_")
+massplot$salloc = paste(massplot$Sal,massplot$Location,sep="_")
+
+c8 = ggplot(data=massplot,aes(x=Density,y=Final_mass,group=salloc))+
+  xlab("Density of Tadpole Environment")+
+  ylab("Mass at Metamorphosis (g)")+
+  geom_line(aes(group=salloc, color=salloc),size =2)+
+  geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=salloc),alpha=.2)+
+  scale_colour_manual(values = cols_salloc) +
+  scale_fill_manual(values = cols_salloc) +
+  theme(legend.position="none")+theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))
+c9 = c8 + geom_jitter(data = metamm, aes(x = Density, y = Final_mass, group = salloc, colour = salloc), size = 2)
+c9
+```
+Length at Metamorphosis
+```{r}
+
+# Are there differences in weight at metamorphosis due to location or trt?
+d1 = lmer(log(MM_total) ~ Sal * Density * Location + (1|Replicate), data = metamm)
+d2 = lmer(log(MM_total) ~ Sal + Density + Location + (1|Replicate), data = metamm)
+d3 = lmer(log(MM_total) ~ Sal * Density + Location + (1|Replicate), data = metamm)
+d4 = lmer(log(MM_total) ~ Sal + Density * Location + (1|Replicate), data = metamm)
+
+anova(d1,d2)
+anova(d2,d3)
+anova(d2,d4) #additive model (d2) is best
+
+#Likelihood ratio testing
+d5 = lmer(log(MM_total) ~ 1 + Density + Location + (1|Replicate), data = metamm)
+d6 = lmer(log(MM_total) ~ Sal + 1 + Location + (1|Replicate), data = metamm)
+d7 = lmer(log(MM_total) ~ Sal + Density + 1 + (1|Replicate), data = metamm)
+
+anova(d2,d5) # Salinity not significant (p = 0.74)
+anova(d2,d6) # Density is nearly significant (p = 0.06)
+anova(d2,d7) # Location is significant (p = 0.003)
+
+```
+
+```{r}
+#Full Plot 
+lenplot <- expand.grid(Sal = unique(metamm$Sal),
+                      #Density = seq(0,8, length = 50),
+                      Density = unique(metamm$Density),
+                      Location = unique(metamm$Location),
+                      MM_total=0)
+mm = model.matrix(terms(d2),lenplot)
+lenplot$MM_total = mm %*% fixef(d2)
+pvar1 <- diag(mm %*% tcrossprod(vcov(d2),mm))
+#tvar1 <- pvar1+VarCorr(b4b)$plot[1]
+lenplot <- data.frame(
+  lenplot
+  , plo = lenplot$MM_total-1.96*sqrt(pvar1)
+  , phi = lenplot$MM_total+1.96*sqrt(pvar1)
+  #, tlo = propsurvplot$binary_hatch-2*sqrt(tvar1)
+  #, thi = propsurvplot$binary_hatch+2*sqrt(tvar1)
+)
+lenplot=data.frame(lenplot[,1:3],apply(lenplot[,4:6],2,exp))
+lenplot$trt = paste(lenplot$Sal,lenplot$Density,lenplot$Location,sep="_")
+lenplot$salloc = paste(lenplot$Sal,lenplot$Location,sep="_")
+
+d8 = ggplot(data=lenplot,aes(x=Density,y=MM_total,group=salloc))+
+  xlab("Tadpole Density")+
+  ylab("Length at Metamorphosis (mm)")+
+  geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=Location),alpha=.2)+
+  geom_point(data = metamm, aes(x = Density, y = MM_total, group = salloc, 
+                                colour = Location,shape=factor(Sal)),position=dodge, size = 2)+
+  geom_line(aes(group=salloc, color=Location,linetype=factor(Sal)),size =2)+
+  scale_shape_manual(values = shipshape)+
+  scale_linetype_manual(values = line2) +
+  scale_colour_manual(values = cols_up) +
+  scale_fill_manual(values = cols_up) +
+  theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica") + 
+  theme(strip.background =element_rect(fill="white")) +
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+d8
+
+```
+```{r}
+#Raw Data Plots
+matamm1  = metamm %>% #To calculate the proportion individuals that survived to metamorphosis
+  group_by(Location,Sal,denlab) %>%
+  summarise(surv = mean(MM_total,na.rm=TRUE),
+            surverr = sd(MM_total,na.rm=TRUE),
+            n = length(MM_total)) 
+matamm1$se = matamm1$surverr/(sqrt(matamm1$n))
+matamm1$salloc = paste(matamm1$Sal,matamm1$Location,sep="_")
+matamm1$phi = matamm1$surv + (matamm1$se)
+matamm1$plo = matamm1$surv - (matamm1$se)
+
+c8 = ggplot(data=matamm1,aes(x=denlab,y=surv,group=salloc))+
+  xlab("Tadpole Density")+
+  ylab("Length at Metamorphosis (mm)")+ #ylim(0.4,1)+
+  #geom_ribbon(aes(ymin = plo, ymax = phi, group=salloc,fill=Location),alpha=.2)+
+  #geom_line(aes(group=salloc, color=Location, linetype = factor(Sal)), size = 2)+
+  scale_linetype_manual(values = line2) +
+  scale_colour_manual(values = cols_up) +
+  scale_fill_manual(values = cols_up) +
+  scale_x_discrete(limits=c("Low","Med","High"))+
+  theme_bw()+
+  #scale_y_continuous(limits = c(0, 1))+
+  #geom_jitter(data=tadmort4,aes(x = tad,y = prop.alive,group=eggloc,color=eggloc))+
+  theme_bw(base_size = 30, base_family = "Helvetica")+ 
+  theme(strip.background =element_rect(fill="white"))+
+  theme(strip.text = element_text(colour = 'black')) +
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.text= element_text(colour = "black"))+
+  theme(legend.position="none")
+c9 = c8 + 
+  #geom_line(aes(colour=Location),position = dodge, linetype = 2)+
+  geom_errorbar(aes(ymin=plo,ymax=phi,colour=Location), position= dodge,width=0.35)+
+  geom_point(aes(colour=Location,shape = salloc), position = dodge, size=8)+
+ #geom_jitter(data = denmort1, aes(x = factor(Density), y = prop.surv, 
+                                    #       group = salloc, colour = Location, shape = factor(Sal)), size = 2) +
+  scale_shape_manual(values = shipshape2)
+c9
+```
